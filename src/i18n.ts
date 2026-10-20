@@ -1776,6 +1776,9 @@ const dict = {
   'approval-hint': { zh: '↑/↓ 选择 · Enter 确认 · Esc 拒绝', en: '↑/↓ select · Enter confirm · Esc reject' },
   'approval-hint-feedback': { zh: '↑/↓/Tab 选择 · Enter 确认 · 选中拒绝后可输入理由 · Esc 拒绝', en: '↑/↓/Tab select · Enter confirm · on No, type a reason · Esc reject' },
   'approval-feedback-row': { zh: '{{label}}：{{reason}}', en: '{{label}}: {{reason}}' },
+  'approval-command-more': { zh: '… 另有 {{count}} 行未显示（完整命令见 transcript）', en: '… {{count}} more lines not shown (full command in the transcript)' },
+  'approval-command-collapse': { zh: '（{{key}} 收起）', en: '({{key}} to collapse)' },
+  'approval-command-expand': { zh: '（{{key}} 展开）', en: '({{key}} to expand)' },
   'approval-subagent': { zh: '来自子代理 {{id}} 的请求', en: 'Requested by subagent {{id}}' },
   'approval-blocked-path': { zh: '涉及允许目录之外的路径：{{path}}', en: 'Outside the allowed directories: {{path}}' },
 

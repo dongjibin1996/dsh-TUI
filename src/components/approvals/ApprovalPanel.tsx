@@ -28,6 +28,7 @@ import { t } from '../../i18n.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
+import { actionMatches, comboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import { flattenPasteInline } from '../../channel/sanitize.js'
@@ -62,6 +63,19 @@ const FEEDBACK_MAX_POINTS = 2000
 const ROW_CHROME_CELLS = 5
 /** The reason never takes more than this many rows of the option list. */
 const FEEDBACK_MAX_LINES = 2
+
+/**
+ * The gated command never takes more than this many rows. A long heredoc used
+ * to grow the panel to the size of the script: the panel is an in-flow,
+ * `flexShrink: 0` block, so the rows past the terminal height — which is where
+ * the option rows live — were simply dropped, and the user saw a screen of
+ * command text with no buttons.
+ */
+const COMMAND_MAX_LINES = 12
+
+/** Rows the panel spends outside the command: divider, margins, the reason,
+ *  "Allow this operation?", the option rows and the hint line. */
+const PANEL_FRAME_ROWS = 8
 
 /** The longest tail of `text` that fits in `cells` display cells. */
 function tailWithin(text: string, cells: number): string {
@@ -117,7 +131,7 @@ function optionLabel(option: PermissionOptionView): string {
 
 export function ApprovalPanel({ approval, background = false, onDecide }: ApprovalPanelProps): React.ReactNode {
   const options = visiblePermissionOptions(approval)
-  const { columns } = useTerminalSize()
+  const { columns, rows } = useTerminalSize()
   // `defaultToNo` opens on the rejection (sorted first); otherwise on the
   // first option, as the DSH panel always has. The ref is the synchronous
   // source of truth: one stdin chunk can carry a focus move and the typing
@@ -131,6 +145,10 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
   // Hover highlight per decision row (mouse affordance; the click handler
   // below mirrors the keyboard Enter on the focused row).
   const [hoverIndex, setHoverIndex] = React.useState(-1)
+  // Ctrl+O lifts the preview cap while the panel is up. Expanded still cannot
+  // exceed the screen budget: asking for more rows would push the options off
+  // the bottom again, which is the bug this cap exists to prevent.
+  const [commandExpanded, setCommandExpanded] = React.useState(false)
   const acceptsFeedback = approval.feedback === true
   const [feedback, setFeedback] = React.useState('')
   // One stdin chunk can carry several key events inside a single React
@@ -165,7 +183,15 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
     applyFeedback(points.slice(0, FEEDBACK_MAX_POINTS).join(''))
   }
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
+    // Ctrl+O expands/collapses the command preview. The transcript's Ctrl+O
+    // lives on an always-active Chat handler, so stop propagation: one
+    // keystroke must not move both this panel and the history behind it.
+    if (approval.command !== undefined && actionMatches('transcript', input, key)) {
+      setCommandExpanded(previous => !previous)
+      event.stopImmediatePropagation()
+      return
+    }
     if (key.escape || (key.ctrl && input === 'c')) {
       reject()
       return
@@ -209,6 +235,20 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
     }
   }, { isActive: true })
 
+  // Pre-wrap here rather than letting <Text wrap> do it: only a height the
+  // panel computes itself can be bounded. The author's newlines are honoured
+  // first — hardWrap knows nothing about '\n' and would otherwise fold the
+  // whole script into one flow, leaving the breaks for Ink to re-wrap at the
+  // wrong width.
+  const commandPreview = ((): { lines: string[]; hidden: number; key: string } | undefined => {
+    if (approval.command === undefined) return undefined
+    const cells = Math.max(16, columns - 8) // panel padding (2+2) + Box paddingX (2+2)
+    const lines = approval.command.split('\n').flatMap(line => hardWrap(line, cells))
+    const budget = Math.max(3, rows - PANEL_FRAME_ROWS - options.length)
+    const maxRows = commandExpanded ? budget : Math.min(COMMAND_MAX_LINES, budget)
+    return { lines: lines.slice(0, maxRows), hidden: Math.max(0, lines.length - maxRows), key: comboDisplay(primaryComboString('transcript')) }
+  })()
+
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
       <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} />
@@ -227,11 +267,19 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
         {approval.title !== undefined && (
           <Text wrap="wrap">{approval.title}</Text>
         )}
-        {approval.command !== undefined && (
+        {commandPreview !== undefined && (
           <Box flexDirection="column" paddingX={2}>
-            <Text dimColor wrap="wrap">
-              {approval.command}
-            </Text>
+            {commandPreview.lines.map((line, index) => (
+              <Text key={index} dimColor wrap="truncate-end">
+                {line}
+              </Text>
+            ))}
+            {commandPreview.hidden > 0 || commandPreview.lines.length >= COMMAND_MAX_LINES ? (
+              <Text dimColor wrap="truncate-end">
+                <Text italic>{commandPreview.hidden > 0 ? `${t('approval-command-more', { count: commandPreview.hidden })} · ` : ''}</Text>
+                {t(commandExpanded ? 'approval-command-collapse' : 'approval-command-expand', { key: commandPreview.key })}
+              </Text>
+            ) : null}
           </Box>
         )}
         {approval.reason !== undefined && (
