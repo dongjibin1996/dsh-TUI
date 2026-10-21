@@ -44,6 +44,7 @@ import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { createHyperlink } from '../../terminal-utils/hyperlink.js'
 import { listWindow } from '../listWindow.js'
+import { stringWidth } from '../../ink/stringWidth.js'
 
 /** Unmodified arrows switch questions; Ctrl/Alt/Super/Shift stay caret motion. */
 function isPlainArrow(key: { ctrl?: boolean; meta?: boolean; super?: boolean; shift?: boolean }): boolean {
@@ -55,6 +56,36 @@ const UNCHECKED = '○'
 const PENCIL = '✎'
 /** One masked code point of a secret answer (`question.secret`). */
 const SECRET_MASK = '•'
+
+/**
+ * The question body and its detail block are model-authored, and the protocol
+ * bounds neither. Rendered with an unbounded `wrap`, a long question grew the
+ * panel past the terminal height and dropped the option rows — the only thing
+ * the panel exists to collect. Both are pre-wrapped and capped instead, and the
+ * rows they actually take are fed back into the option-list budget so
+ * `listWindow` keeps its arithmetic exact.
+ */
+const QUESTION_MAX_LINES = 6
+const DETAIL_MAX_LINES = 6
+
+/** Hard-wrap `text` into rows of at most `cells` display cells. */
+function wrapRows(text: string, cells: number): string[] {
+  const rows: string[] = []
+  let row = ''
+  let width = 0
+  for (const point of text) {
+    const next = stringWidth(point)
+    if (width + next > cells && row !== '') {
+      rows.push(row)
+      row = ''
+      width = 0
+    }
+    row += point
+    width += next
+  }
+  rows.push(row)
+  return rows
+}
 
 /**
  * Paste cap for one answer field, in code points. Typing is naturally
@@ -184,7 +215,7 @@ export function AskUserQuestionPanel({
   // Opening Tab and later keys may share one stdin batch. Stop the list
   // synchronously, before the nested editor has had a chance to mount.
   const editingRef = React.useRef(false)
-  const { rows: terminalRows } = useTerminalSize()
+  const { rows: terminalRows, columns } = useTerminalSize()
   /** Rows: the real options plus the inline input row at the tail. */
   const rowCount = options.length + (hideCustomInput ? 0 : 1)
   // A saved draft wins over the wizard's default selection (returning to a
@@ -268,10 +299,23 @@ export function AskUserQuestionPanel({
   // lists then use fixed one/two-line rows so listWindow's budget is exact;
   // short questionnaires retain their existing wrapped presentation.
   const linkText = question.link === undefined || question.link === '' ? '' : createHyperlink(question.link)
-  const detailRows = (question.detail === undefined ? 0 : question.detail.split('\n').length + 1)
+  // panel padding (2 + 2) plus the option list's pointer/gutter columns
+  const textCells = Math.max(16, columns - 6)
+  const questionWrapped = question.question.split('\n').flatMap(line => wrapRows(line, textCells))
+  const questionShown = questionWrapped.slice(0, QUESTION_MAX_LINES)
+  const questionHidden = questionWrapped.length - questionShown.length
+  const detailWrapped = question.detail === undefined
+    ? []
+    : question.detail.split('\n').flatMap(line => wrapRows(line, textCells))
+  const detailShown = detailWrapped.slice(0, DETAIL_MAX_LINES)
+  const detailHidden = detailWrapped.length - detailShown.length
+  const detailBlocks = detailShown.length + (detailHidden > 0 ? 1 : 0)
+  const detailRows = (question.detail === undefined ? 0 : detailBlocks + 1)
     + (linkText === '' ? 0 : question.detail === undefined ? 2 : 1)
+  const questionRows = questionShown.length + (questionHidden > 0 ? 1 : 0)
   const reservedRows = 12
     + (question.header === undefined ? 0 : 1)
+    + questionRows
     + detailRows
     + (hideCustomInput ? 0 : 1)
     + (error === null ? 0 : 2)
@@ -876,16 +920,28 @@ export function AskUserQuestionPanel({
             ◈ {question.header}
           </Text>
         )}
-        <Text bold wrap="wrap">
-          {question.question}
-        </Text>
+        {questionShown.map((line, index) => (
+          <Text key={`q${index}`} bold wrap="truncate-end">
+            {line}
+          </Text>
+        ))}
+        {questionHidden > 0 && (
+          <Text dimColor italic wrap="truncate-end">
+            {t('question-more-lines', { count: questionHidden })}
+          </Text>
+        )}
         {(question.detail !== undefined || linkText !== '') && (
           <Box flexDirection="column" marginTop={1}>
-            {question.detail?.split('\n').map((line, index) => (
-              <Text key={index} dimColor italic wrap="wrap">
+            {detailShown.map((line, index) => (
+              <Text key={`d${index}`} dimColor italic wrap="truncate-end">
                 {line}
               </Text>
             ))}
+            {detailHidden > 0 && (
+              <Text dimColor italic wrap="truncate-end">
+                {t('question-more-lines', { count: detailHidden })}
+              </Text>
+            )}
             {linkText !== '' && <Text wrap="wrap">{linkText}</Text>}
           </Box>
         )}
